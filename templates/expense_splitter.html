@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Splitter</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            body {
+                background: white;
+            }
+            .print-title {
+                display: block !important;
+            }
+        }
+        .print-title {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        const { useState, useEffect, createElement: e } = React;
+
+        function ExpenseSplitter() {
+            const [sessionId, setSessionId] = useState(null);
+            const [currentUser, setCurrentUser] = useState(null);
+            const [personA, setPersonA] = useState('');
+            const [personB, setPersonB] = useState('');
+            const [error, setError] = useState(null);
+            const [expenses, setExpenses] = useState([]);
+            const [loading, setLoading] = useState(true);
+
+            const [newExpense, setNewExpense] = useState({
+                description: '',
+                amount: '',
+                datetime: new Date().toISOString().slice(0, 16),
+                paid_by: 'A',
+                split_mode: 'equal',
+                ratio_a: '1',
+                ratio_b: '1'
+            });
+
+            useEffect(() => {
+                const path = window.location.pathname;
+                const match = path.match(/\/session\/([^\/]+)\/user\/([^\/]+)/);
+                
+                if (match) {
+                    const [, session, user] = match;
+                    setSessionId(session);
+                    setCurrentUser(user);
+                    loadSessionData(session);
+                } else {
+                    setError('Invalid URL format');
+                    setLoading(false);
+                }
+            }, []);
+
+            const loadSessionData = async (session) => {
+                try {
+                    const response = await fetch(`/api/session/${session}/info`);
+                    if (!response.ok) {
+                        throw new Error('Invalid session');
+                    }
+                    const data = await response.json();
+                    setPersonA(data.person_a);
+                    setPersonB(data.person_b);
+                    await loadExpenses(session);
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const loadExpenses = async (session) => {
+                try {
+                    const response = await fetch(`/api/session/${session}/expenses`);
+                    const data = await response.json();
+                    setExpenses(data);
+                } catch (err) {
+                    console.error('Failed to load expenses:', err);
+                }
+            };
+
+            const addExpense = async () => {
+                if (!newExpense.description || !newExpense.amount) {
+                    alert('Please enter description and amount');
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`/api/session/${sessionId}/expenses`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ...newExpense,
+                            amount: parseFloat(newExpense.amount)
+                        })
+                    });
+
+                    if (response.ok) {
+                        await loadExpenses(sessionId);
+                        setNewExpense({
+                            description: '',
+                            amount: '',
+                            datetime: new Date().toISOString().slice(0, 16),
+                            paid_by: 'A',
+                            split_mode: 'equal',
+                            ratio_a: '1',
+                            ratio_b: '1'
+                        });
+                    }
+                } catch (err) {
+                    alert('Failed to add expense: ' + err.message);
+                }
+            };
+
+            const deleteExpense = async (id) => {
+                if (!confirm('Delete this expense?')) return;
+
+                try {
+                    const response = await fetch(`/api/session/${sessionId}/expenses/${id}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (response.ok) {
+                        await loadExpenses(sessionId);
+                    }
+                } catch (err) {
+                    alert('Failed to delete expense: ' + err.message);
+                }
+            };
+
+            const calculateSettlement = () => {
+                let aOwes = 0, bOwes = 0, aPaid = 0, bPaid = 0;
+
+                expenses.forEach(expense => {
+                    const amount = parseFloat(expense.amount);
+                    if (expense.paid_by === 'A') {
+                        aPaid += amount;
+                    } else {
+                        bPaid += amount;
+                    }
+
+                    if (expense.split_mode === 'equal') {
+                        aOwes += amount / 2;
+                        bOwes += amount / 2;
+                    } else {
+                        const ratioA = parseFloat(expense.ratio_a) || 0;
+                        const ratioB = parseFloat(expense.ratio_b) || 0;
+                        const total = ratioA + ratioB;
+                        if (total > 0) {
+                            aOwes += amount * (ratioA / total);
+                            bOwes += amount * (ratioB / total);
+                        }
+                    }
+                });
+
+                return {
+                    aPaid, bPaid, aOwes, bOwes,
+                    aBalance: aPaid - aOwes,
+                    bBalance: bPaid - bOwes
+                };
+            };
+
+            const formatDateTime = (datetime) => {
+                const date = new Date(datetime);
+                return date.toLocaleString('en-US', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', hour12: false
+                });
+            };
+
+            if (loading) {
+                return e('div', { className: 'min-h-screen bg-gray-50 flex items-center justify-center' },
+                    e('div', { className: 'text-xl' }, 'Loading...')
+                );
+            }
+
+            if (error) {
+                return e('div', { className: 'min-h-screen bg-gray-50 p-4 flex items-center justify-center' },
+                    e('div', { className: 'bg-red-50 border border-red-200 rounded-lg p-6 max-w-md' },
+                        e('h2', { className: 'text-xl font-semibold text-red-800 mb-2' }, 'Error'),
+                        e('p', { className: 'text-red-700' }, error)
+                    )
+                );
+            }
+
+            const settlement = calculateSettlement();
+
+            return e('div', { className: 'min-h-screen bg-gray-50 p-4' },
+                e('div', { className: 'max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-6' },
+                    // Header
+                    e('div', { className: 'mb-6' },
+                        e('h1', { className: 'text-3xl font-bold text-gray-800 print-title' }, 'Expense Splitter'),
+                        e('div', { className: 'text-sm text-gray-500 mt-1' },
+                            `Session: ${sessionId} | User: ${currentUser}`
+                        ),
+                        e('button', {
+                            className: 'mt-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 no-print',
+                            onClick: () => window.print()
+                        }, 'Print / Save PDF')
+                    ),
+
+                    // Person Names
+                    e('div', { className: 'grid grid-cols-2 gap-4 mb-6 bg-gray-50 p-4 rounded-lg' },
+                        e('div', null,
+                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Person A'),
+                            e('div', { className: 'text-lg font-semibold text-gray-800' }, personA)
+                        ),
+                        e('div', null,
+                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Person B'),
+                            e('div', { className: 'text-lg font-semibold text-gray-800' }, personB)
+                        )
+                    ),
+
+                    // Add Expense Form (hidden in print)
+                    e('div', { className: 'bg-blue-50 p-4 rounded-lg mb-6 no-print' },
+                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Add Expense'),
+                        
+                        e('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mb-4' },
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Description'),
+                                e('input', {
+                                    type: 'text',
+                                    value: newExpense.description,
+                                    onChange: (ev) => setNewExpense({...newExpense, description: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md',
+                                    placeholder: 'e.g., 晚餐, Dinner, 油费'
+                                })
+                            ),
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Amount ($)'),
+                                e('input', {
+                                    type: 'number',
+                                    step: '0.01',
+                                    value: newExpense.amount,
+                                    onChange: (ev) => setNewExpense({...newExpense, amount: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                })
+                            ),
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Date & Time'),
+                                e('input', {
+                                    type: 'datetime-local',
+                                    value: newExpense.datetime,
+                                    onChange: (ev) => setNewExpense({...newExpense, datetime: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                })
+                            ),
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Paid By'),
+                                e('select', {
+                                    value: newExpense.paid_by,
+                                    onChange: (ev) => setNewExpense({...newExpense, paid_by: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                },
+                                    e('option', { value: 'A' }, personA),
+                                    e('option', { value: 'B' }, personB)
+                                )
+                            )
+                        ),
+
+                        e('div', { className: 'mb-4' },
+                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Split Mode'),
+                            e('select', {
+                                value: newExpense.split_mode,
+                                onChange: (ev) => setNewExpense({...newExpense, split_mode: ev.target.value}),
+                                className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                            },
+                                e('option', { value: 'equal' }, 'Equal (50/50)'),
+                                e('option', { value: 'ratio' }, 'Custom Ratio')
+                            )
+                        ),
+
+                        newExpense.split_mode === 'ratio' && e('div', { className: 'grid grid-cols-2 gap-4 mb-4' },
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, `${personA} Ratio`),
+                                e('input', {
+                                    type: 'number',
+                                    step: '0.01',
+                                    value: newExpense.ratio_a,
+                                    onChange: (ev) => setNewExpense({...newExpense, ratio_a: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                })
+                            ),
+                            e('div', null,
+                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, `${personB} Ratio`),
+                                e('input', {
+                                    type: 'number',
+                                    step: '0.01',
+                                    value: newExpense.ratio_b,
+                                    onChange: (ev) => setNewExpense({...newExpense, ratio_b: ev.target.value}),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                })
+                            )
+                        ),
+
+                        e('button', {
+                            onClick: addExpense,
+                            className: 'w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700'
+                        }, '+ Add Expense')
+                    ),
+
+                    // Expenses List
+                    e('div', { className: 'mb-6' },
+                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Expenses'),
+                        expenses.length === 0 
+                            ? e('p', { className: 'text-gray-500 text-center py-8' }, 'No expenses yet')
+                            : e('div', { className: 'space-y-2' },
+                                expenses.map(expense => {
+                                    const ratioA = parseFloat(expense.ratio_a) || 0;
+                                    const ratioB = parseFloat(expense.ratio_b) || 0;
+                                    const total = ratioA + ratioB;
+                                    const percentA = total > 0 ? (ratioA / total * 100).toFixed(1) : 50;
+                                    const percentB = total > 0 ? (ratioB / total * 100).toFixed(1) : 50;
+
+                                    return e('div', {
+                                        key: expense.id,
+                                        className: 'border border-gray-200 rounded-lg p-4 hover:bg-gray-50'
+                                    },
+                                        e('div', { className: 'flex justify-between items-start' },
+                                            e('div', { className: 'flex-1' },
+                                                e('div', { className: 'flex items-center gap-2 mb-1' },
+                                                    e('span', { className: 'font-semibold text-gray-800' }, expense.description),
+                                                    e('span', { className: 'text-lg font-bold text-green-600' }, `$${parseFloat(expense.amount).toFixed(2)}`)
+                                                ),
+                                                e('div', { className: 'text-sm text-gray-600' },
+                                                    e('span', null, formatDateTime(expense.datetime)),
+                                                    e('span', { className: 'mx-2' }, '•'),
+                                                    e('span', null, `Paid by ${expense.paid_by === 'A' ? personA : personB}`),
+                                                    e('span', { className: 'mx-2' }, '•'),
+                                                    e('span', null,
+                                                        expense.split_mode === 'equal'
+                                                            ? 'Split equally (50% / 50%)'
+                                                            : `Ratio ${ratioA}:${ratioB} (${percentA}% / ${percentB}%)`
+                                                    )
+                                                )
+                                            ),
+                                            e('button', {
+                                                onClick: () => deleteExpense(expense.id),
+                                                className: 'text-red-500 hover:text-red-700 ml-4 no-print'
+                                            }, '🗑️')
+                                        )
+                                    );
+                                })
+                            )
+                    ),
+
+                    // Settlement
+                    expenses.length > 0 && e('div', { className: 'bg-green-50 p-6 rounded-lg' },
+                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Settlement Summary'),
+                        
+                        e('div', { className: 'grid grid-cols-2 gap-6 mb-6' },
+                            e('div', { className: 'bg-white p-4 rounded-lg' },
+                                e('h3', { className: 'font-semibold text-gray-700 mb-2' }, personA),
+                                e('div', { className: 'space-y-1 text-sm' },
+                                    e('div', { className: 'flex justify-between' },
+                                        e('span', null, 'Total Paid:'),
+                                        e('span', { className: 'font-semibold' }, `$${settlement.aPaid.toFixed(2)}`)
+                                    ),
+                                    e('div', { className: 'flex justify-between' },
+                                        e('span', null, 'Should Pay:'),
+                                        e('span', { className: 'font-semibold' }, `$${settlement.aOwes.toFixed(2)}`)
+                                    ),
+                                    e('div', { className: 'flex justify-between border-t pt-1' },
+                                        e('span', null, 'Balance:'),
+                                        e('span', {
+                                            className: `font-bold ${settlement.aBalance >= 0 ? 'text-green-600' : 'text-red-600'}`
+                                        }, `$${settlement.aBalance.toFixed(2)}`)
+                                    )
+                                )
+                            ),
+                            e('div', { className: 'bg-white p-4 rounded-lg' },
+                                e('h3', { className: 'font-semibold text-gray-700 mb-2' }, personB),
+                                e('div', { className: 'space-y-1 text-sm' },
+                                    e('div', { className: 'flex justify-between' },
+                                        e('span', null, 'Total Paid:'),
+                                        e('span', { className: 'font-semibold' }, `$${settlement.bPaid.toFixed(2)}`)
+                                    ),
+                                    e('div', { className: 'flex justify-between' },
+                                        e('span', null, 'Should Pay:'),
+                                        e('span', { className: 'font-semibold' }, `$${settlement.bOwes.toFixed(2)}`)
+                                    ),
+                                    e('div', { className: 'flex justify-between border-t pt-1' },
+                                        e('span', null, 'Balance:'),
+                                        e('span', {
+                                            className: `font-bold ${settlement.bBalance >= 0 ? 'text-green-600' : 'text-red-600'}`
+                                        }, `$${settlement.bBalance.toFixed(2)}`)
+                                    )
+                                )
+                            )
+                        ),
+
+                        e('div', { className: 'bg-white p-4 rounded-lg border-2 border-green-600' },
+                            e('h3', { className: 'font-bold text-lg text-gray-800 mb-2' }, 'Final Settlement:'),
+                            settlement.aBalance > 0
+                                ? e('p', { className: 'text-lg' },
+                                    e('span', { className: 'font-semibold' }, personB),
+                                    ' owes ',
+                                    e('span', { className: 'font-semibold' }, personA),
+                                    e('span', { className: 'text-2xl font-bold text-green-600 ml-2' }, `$${settlement.aBalance.toFixed(2)}`)
+                                )
+                                : settlement.aBalance < 0
+                                    ? e('p', { className: 'text-lg' },
+                                        e('span', { className: 'font-semibold' }, personA),
+                                        ' owes ',
+                                        e('span', { className: 'font-semibold' }, personB),
+                                        e('span', { className: 'text-2xl font-bold text-green-600 ml-2' }, `$${Math.abs(settlement.aBalance).toFixed(2)}`)
+                                    )
+                                    : e('p', { className: 'text-lg text-gray-600' }, 'All settled! No one owes anyone.')
+                        )
+                    )
+                )
+            );
+        }
+
+        ReactDOM.render(
+            React.createElement(ExpenseSplitter),
+            document.getElementById('root')
+        );
+    </script>
+</body>
+</html>

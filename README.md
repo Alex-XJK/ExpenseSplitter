@@ -1,0 +1,184 @@
+# Expense Splitter
+A simple web application to split expenses between a group of people in a session. Built with Flask and SQLite.
+
+## ⚠️ Security Disclaimer
+This application is designed for trusted users only and does NOT implement security best practices.
+
+This expense splitter is intended for use between friends or family members who trust each other. It lacks several security features that would be required for a production application:
+
+- **No authentication**: Users can access any session if they know the session ID and username in the URL. There are no passwords or login verification.
+- **No encryption**: Data is stored in plain text in SQLite. Communications use HTTP (not HTTPS) by default.
+- **No authorization checks**: Any user who can access one session could potentially access other sessions by guessing session IDs.
+- **No input validation**: Minimal protection against malicious input or SQL injection (though Flask provides some basic protections).
+- **Session IDs in URLs**: Session identifiers and usernames are visible in the URL, which could be logged or cached.
+
+Use this application only if:
+
+- You trust everyone who has access to the server
+- You're splitting expenses with people you know personally
+- The financial amounts involved are small enough that security risks are acceptable
+- You understand that anyone with network access to your server can potentially view or modify all expense data
+
+For production use with untrusted users, you would need to add:
+
+- Proper authentication (passwords, OAuth, etc.)
+- HTTPS/TLS encryption
+- Session management with secure tokens
+- Database encryption
+- Input validation and sanitization
+- Rate limiting and other abuse prevention measures
+
+This is a convenience tool for friends, not a financial security application.
+
+## File Structure
+
+```
+expense-splitter/
+├── server.py              # Flask backend
+├── requirements.txt       # Python dependencies
+├── config.json.example    # Example configuration (commit this)
+├── config.json           # Your actual config (DO NOT commit - in .gitignore)
+├── .gitignore            # Git ignore file
+├── database.db           # SQLite database (auto-created, gitignored)
+└── templates/
+    └── expense_splitter.html   # Frontend HTML
+```
+
+## Installation Steps on Ubuntu Server
+
+### 1. Set Up Python Virtual Environment
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install Flask
+pip install -r requirements.txt
+```
+
+### 2. Configure Sessions
+
+Edit `config.json` (NOT the .example file) to add your sessions:
+
+```json
+{
+  "sessions": {
+    "your_trip_2026": {
+      "person_a": "Your Name",
+      "person_b": "Friend Name",
+      "users": ["yourname", "friendname"]
+    },
+    "another_trip": {
+      "person_a": "Alice",
+      "person_b": "Bob",
+      "users": ["alice", "bob"]
+    }
+  }
+}
+```
+
+**Important:** 
+- `config.json` contains your private data and is in `.gitignore`
+- `config.json.example` is the template you commit to GitHub
+- Never commit `config.json` to a public repository
+
+### 3. Run the Application
+
+```bash
+# Make sure you're in the project directory with venv activated
+python server.py
+```
+
+The server will start on `http://0.0.0.0:5000`
+
+### 4. Access the Application
+
+- `http://localhost:5000/`
+
+
+## Production Deployment
+
+For production, you should:
+
+### 1. Use Gunicorn instead of Flask development server
+
+```bash
+pip install gunicorn
+
+# Run with Gunicorn
+gunicorn -w 4 -b 0.0.0.0:5000 server:app
+```
+
+### 2. Set up Nginx as reverse proxy
+
+```bash
+sudo apt install nginx -y
+```
+
+Create `/etc/nginx/sites-available/expense-splitter`:
+
+```nginx
+server {
+    listen 80;
+    server_name your_domain.com;  # or your server IP
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Enable the site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/expense-splitter /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+### 3. Set up as a system service
+
+Create `/etc/systemd/system/expense-splitter.service`:
+
+```ini
+[Unit]
+Description=Expense Splitter
+After=network.target
+
+[Service]
+User=your_username
+WorkingDirectory=/home/your_username/expense-splitter
+Environment="PATH=/home/your_username/expense-splitter/venv/bin"
+ExecStart=/home/your_username/expense-splitter/venv/bin/gunicorn -w 4 -b 127.0.0.1:5000 server:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start expense-splitter
+sudo systemctl enable expense-splitter
+```
+
+## Firewall Configuration
+
+If you need to access from external networks:
+
+```bash
+# Allow port 5000 (development)
+sudo ufw allow 5000/tcp
+
+# Or allow port 80 (if using Nginx)
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp  # for HTTPS
+```

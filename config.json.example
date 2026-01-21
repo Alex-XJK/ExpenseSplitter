@@ -1,0 +1,14 @@
+{
+  "sessions": {
+    "123456": {
+      "person_a": "Person A Name",
+      "person_b": "Person B Name",
+      "users": ["user1", "user2"]
+    },
+    "789012": {
+      "person_a": "Another Person",
+      "person_b": "Another Friend",
+      "users": ["username1", "username2"]
+    }
+  }
+}
