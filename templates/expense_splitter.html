@@ -30,20 +30,27 @@
     <script>
         const { useState, useEffect, createElement: e } = React;
 
+        const defaultCurrencies = {
+            USD: { code: 'USD', name: 'US Dollar', symbol: '$', rate_to_usd: 1 }
+        };
+        const defaultPaidBy = '{{ default_paid_by }}';
+
         function ExpenseSplitter() {
             const [sessionId, setSessionId] = useState(null);
             const [currentUser, setCurrentUser] = useState(null);
             const [personA, setPersonA] = useState('');
             const [personB, setPersonB] = useState('');
+            const [currencies, setCurrencies] = useState(defaultCurrencies);
             const [error, setError] = useState(null);
             const [expenses, setExpenses] = useState([]);
             const [loading, setLoading] = useState(true);
 
             const [newExpense, setNewExpense] = useState({
                 description: '',
-                amount: '',
+                original_amount: '',
+                original_currency: 'USD',
                 datetime: new Date().toISOString().slice(0, 16),
-                paid_by: 'A',
+                paid_by: defaultPaidBy,
                 split_mode: 'equal',
                 ratio_a: '1',
                 ratio_b: '1'
@@ -52,7 +59,7 @@
             useEffect(() => {
                 const path = window.location.pathname;
                 const match = path.match(/\/session\/([^\/]+)\/user\/([^\/]+)/);
-                
+
                 if (match) {
                     const [, session, user] = match;
                     setSessionId(session);
@@ -73,6 +80,7 @@
                     const data = await response.json();
                     setPersonA(data.person_a);
                     setPersonB(data.person_b);
+                    setCurrencies(data.currencies && Object.keys(data.currencies).length ? data.currencies : defaultCurrencies);
                     await loadExpenses(session);
                 } catch (err) {
                     setError(err.message);
@@ -92,7 +100,7 @@
             };
 
             const addExpense = async () => {
-                if (!newExpense.description || !newExpense.amount) {
+                if (!newExpense.description || !newExpense.original_amount) {
                     alert('Please enter description and amount');
                     return;
                 }
@@ -103,22 +111,27 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             ...newExpense,
-                            amount: parseFloat(newExpense.amount)
+                            original_amount: parseFloat(newExpense.original_amount),
+                            created_by: currentUser
                         })
                     });
 
-                    if (response.ok) {
-                        await loadExpenses(sessionId);
-                        setNewExpense({
-                            description: '',
-                            amount: '',
-                            datetime: new Date().toISOString().slice(0, 16),
-                            paid_by: 'A',
-                            split_mode: 'equal',
-                            ratio_a: '1',
-                            ratio_b: '1'
-                        });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Failed to add expense');
                     }
+
+                    await loadExpenses(sessionId);
+                    setNewExpense((previous) => ({
+                        description: '',
+                        original_amount: '',
+                        original_currency: previous.original_currency,
+                        datetime: new Date().toISOString().slice(0, 16),
+                        paid_by: defaultPaidBy,
+                        split_mode: 'equal',
+                        ratio_a: '1',
+                        ratio_b: '1'
+                    }));
                 } catch (err) {
                     alert('Failed to add expense: ' + err.message);
                 }
@@ -128,13 +141,16 @@
                 if (!confirm('Delete this expense?')) return;
 
                 try {
-                    const response = await fetch(`/api/session/${sessionId}/expenses/${id}`, {
+                    const response = await fetch(`/api/session/${sessionId}/expenses/${id}?username=${encodeURIComponent(currentUser)}`, {
                         method: 'DELETE'
                     });
+                    const data = await response.json();
 
-                    if (response.ok) {
-                        await loadExpenses(sessionId);
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Failed to delete expense');
                     }
+
+                    await loadExpenses(sessionId);
                 } catch (err) {
                     alert('Failed to delete expense: ' + err.message);
                 }
@@ -172,6 +188,88 @@
                 };
             };
 
+            const formatUsd = (amount) => `$${(parseFloat(amount) || 0).toFixed(2)}`;
+
+            const getExpenseShares = (expense) => {
+                const amount = parseFloat(expense.amount) || 0;
+                if (expense.split_mode === 'equal') {
+                    return { A: amount / 2, B: amount / 2 };
+                }
+
+                const ratioA = parseFloat(expense.ratio_a) || 0;
+                const ratioB = parseFloat(expense.ratio_b) || 0;
+                const totalRatio = ratioA + ratioB;
+                if (totalRatio <= 0) {
+                    return { A: 0, B: 0 };
+                }
+
+                return {
+                    A: amount * (ratioA / totalRatio),
+                    B: amount * (ratioB / totalRatio)
+                };
+            };
+
+            const getExpenseImpact = (expense) => {
+                const amount = parseFloat(expense.amount) || 0;
+                const currentPersonKey = defaultPaidBy === 'B' ? 'B' : 'A';
+                const shares = getExpenseShares(expense);
+                const paidByCurrentUser = expense.paid_by === currentPersonKey;
+                const paidAmount = paidByCurrentUser ? amount : 0;
+                const shareAmount = shares[currentPersonKey] || 0;
+                const balance = paidAmount - shareAmount;
+                const otherPerson = currentPersonKey === 'A' ? personB : personA;
+                const payerName = expense.paid_by === 'A' ? personA : personB;
+
+                if (balance > 0.005) {
+                    return {
+                        tone: 'positive',
+                        shareAmount,
+                        balance,
+                        message: `${otherPerson} owes you ${formatUsd(balance)}`,
+                        cardClass: 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50',
+                        amountClass: 'text-emerald-700',
+                        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                    };
+                }
+
+                if (balance < -0.005) {
+                    return {
+                        tone: 'negative',
+                        shareAmount,
+                        balance,
+                        message: `You owe ${payerName} ${formatUsd(Math.abs(balance))}`,
+                        cardClass: 'border-red-200 bg-red-50/40 hover:bg-red-50',
+                        amountClass: 'text-red-700',
+                        badgeClass: 'bg-red-100 text-red-800 border-red-200'
+                    };
+                }
+
+                const noShare = shareAmount <= 0.005 && paidAmount <= 0.005;
+                return {
+                    tone: 'neutral',
+                    shareAmount,
+                    balance,
+                    message: noShare ? 'No share for you' : 'Settled for you',
+                    cardClass: 'border-slate-200 bg-slate-50/40 hover:bg-slate-50',
+                    amountClass: 'text-slate-600',
+                    badgeClass: 'bg-slate-100 text-slate-700 border-slate-200'
+                };
+            };
+
+            const formatOriginalAmount = (expense) => {
+                const currencyCode = expense.original_currency || 'USD';
+                const currency = currencies[currencyCode] || { symbol: currencyCode, code: currencyCode };
+                const originalAmount = parseFloat(expense.original_amount || expense.amount || 0);
+                return `${currency.symbol}${originalAmount.toFixed(2)} ${currencyCode}`;
+            };
+
+            const shouldShowOriginalCurrency = (expense) => {
+                const currencyCode = expense.original_currency || 'USD';
+                const originalAmount = parseFloat(expense.original_amount || expense.amount || 0);
+                const usdAmount = parseFloat(expense.amount || 0);
+                return currencyCode !== 'USD' || Math.abs(originalAmount - usdAmount) > 0.005;
+            };
+
             const formatDateTime = (datetime) => {
                 const date = new Date(datetime);
                 return date.toLocaleString('en-US', {
@@ -181,13 +279,13 @@
             };
 
             if (loading) {
-                return e('div', { className: 'min-h-screen bg-gray-50 flex items-center justify-center' },
-                    e('div', { className: 'text-xl' }, 'Loading...')
+                return e('div', { className: 'min-h-screen bg-slate-50 flex items-center justify-center' },
+                    e('div', { className: 'text-xl text-slate-700' }, 'Loading...')
                 );
             }
 
             if (error) {
-                return e('div', { className: 'min-h-screen bg-gray-50 p-4 flex items-center justify-center' },
+                return e('div', { className: 'min-h-screen bg-slate-50 p-4 flex items-center justify-center' },
                     e('div', { className: 'bg-red-50 border border-red-200 rounded-lg p-6 max-w-md' },
                         e('h2', { className: 'text-xl font-semibold text-red-800 mb-2' }, 'Error'),
                         e('p', { className: 'text-red-700' }, error)
@@ -196,73 +294,89 @@
             }
 
             const settlement = calculateSettlement();
+            const currencyOptions = Object.values(currencies).sort((a, b) => a.code.localeCompare(b.code));
+            const selectedCurrency = currencies[newExpense.original_currency] || defaultCurrencies.USD;
+            const enteredAmount = parseFloat(newExpense.original_amount) || 0;
+            const convertedAmount = enteredAmount * selectedCurrency.rate_to_usd;
 
-            return e('div', { className: 'min-h-screen bg-gray-50 p-4' },
-                e('div', { className: 'max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-6' },
-                    // Header
-                    e('div', { className: 'mb-6' },
-                        e('h1', { className: 'text-3xl font-bold text-gray-800 print-title' }, 'Expense Splitter'),
-                        e('div', { className: 'text-sm text-gray-500 mt-1' },
-                            `Session: ${sessionId} | User: ${currentUser}`
+            return e('div', { className: 'min-h-screen bg-slate-50 p-4' },
+                e('div', { className: 'max-w-5xl mx-auto bg-white rounded-lg shadow-lg p-6' },
+                    e('div', { className: 'mb-6 flex flex-col md:flex-row md:items-start md:justify-between gap-4' },
+                        e('div', null,
+                            e('h1', { className: 'text-3xl font-bold text-slate-900 print-title' }, 'Expense Splitter'),
+                            e('div', { className: 'text-sm text-slate-500 mt-1' },
+                                `Session: ${sessionId} | User: ${currentUser}`
+                            )
                         ),
                         e('button', {
-                            className: 'mt-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 no-print',
+                            className: 'px-4 py-2 bg-teal-700 text-white rounded-md hover:bg-teal-800 no-print',
                             onClick: () => window.print()
                         }, 'Print / Save PDF')
                     ),
 
-                    // Person Names
-                    e('div', { className: 'grid grid-cols-2 gap-4 mb-6 bg-gray-50 p-4 rounded-lg' },
+                    e('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 bg-slate-100 p-4 rounded-lg' },
                         e('div', null,
-                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Person A'),
-                            e('div', { className: 'text-lg font-semibold text-gray-800' }, personA)
+                            e('label', { className: 'block text-sm font-medium text-slate-600 mb-1' }, 'Person A'),
+                            e('div', { className: 'text-lg font-semibold text-slate-900' }, personA)
                         ),
                         e('div', null,
-                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Person B'),
-                            e('div', { className: 'text-lg font-semibold text-gray-800' }, personB)
+                            e('label', { className: 'block text-sm font-medium text-slate-600 mb-1' }, 'Person B'),
+                            e('div', { className: 'text-lg font-semibold text-slate-900' }, personB)
                         )
                     ),
 
-                    // Add Expense Form (hidden in print)
-                    e('div', { className: 'bg-blue-50 p-4 rounded-lg mb-6 no-print' },
-                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Add Expense'),
-                        
+                    e('div', { className: 'bg-cyan-50 border border-cyan-100 p-4 rounded-lg mb-6 no-print' },
+                        e('h2', { className: 'text-xl font-semibold text-slate-900 mb-4' }, 'Add Expense'),
+
                         e('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mb-4' },
                             e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Description'),
+                                e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Description'),
                                 e('input', {
                                     type: 'text',
                                     value: newExpense.description,
                                     onChange: (ev) => setNewExpense({...newExpense, description: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md',
-                                    placeholder: 'e.g., 晚餐, Dinner, 油费'
+                                    className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white',
+                                    placeholder: 'e.g., Dinner, gas, tickets'
                                 })
                             ),
-                            e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Amount ($)'),
-                                e('input', {
-                                    type: 'number',
-                                    step: '0.01',
-                                    value: newExpense.amount,
-                                    onChange: (ev) => setNewExpense({...newExpense, amount: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
-                                })
+                            e('div', { className: 'grid grid-cols-5 gap-3' },
+                                e('div', { className: 'col-span-3' },
+                                    e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Original Amount'),
+                                    e('input', {
+                                        type: 'number',
+                                        step: '0.01',
+                                        min: '0',
+                                        value: newExpense.original_amount,
+                                        onChange: (ev) => setNewExpense({...newExpense, original_amount: ev.target.value}),
+                                        className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
+                                    })
+                                ),
+                                e('div', { className: 'col-span-2' },
+                                    e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Currency'),
+                                    e('select', {
+                                        value: newExpense.original_currency,
+                                        onChange: (ev) => setNewExpense({...newExpense, original_currency: ev.target.value}),
+                                        className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
+                                    },
+                                        currencyOptions.map(currency => e('option', { key: currency.code, value: currency.code }, currency.code))
+                                    )
+                                )
                             ),
                             e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Date & Time'),
+                                e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Date & Time'),
                                 e('input', {
                                     type: 'datetime-local',
                                     value: newExpense.datetime,
                                     onChange: (ev) => setNewExpense({...newExpense, datetime: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                    className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
                                 })
                             ),
                             e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Paid By'),
+                                e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Paid By'),
                                 e('select', {
                                     value: newExpense.paid_by,
                                     onChange: (ev) => setNewExpense({...newExpense, paid_by: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                    className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
                                 },
                                     e('option', { value: 'A' }, personA),
                                     e('option', { value: 'B' }, personB)
@@ -270,12 +384,16 @@
                             )
                         ),
 
+                        e('div', { className: 'mb-4 rounded-md bg-white border border-cyan-100 px-3 py-2 text-sm text-slate-700' },
+                            `${selectedCurrency.name} rate: 1 ${selectedCurrency.code} = ${formatUsd(selectedCurrency.rate_to_usd)}. USD used for settlement: ${formatUsd(convertedAmount)}`
+                        ),
+
                         e('div', { className: 'mb-4' },
-                            e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Split Mode'),
+                            e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, 'Split Mode'),
                             e('select', {
                                 value: newExpense.split_mode,
                                 onChange: (ev) => setNewExpense({...newExpense, split_mode: ev.target.value}),
-                                className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
                             },
                                 e('option', { value: 'equal' }, 'Equal (50/50)'),
                                 e('option', { value: 'ratio' }, 'Custom Ratio')
@@ -284,38 +402,39 @@
 
                         newExpense.split_mode === 'ratio' && e('div', { className: 'grid grid-cols-2 gap-4 mb-4' },
                             e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, `${personA} Ratio`),
+                                e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, `${personA} Ratio`),
                                 e('input', {
                                     type: 'number',
                                     step: '0.01',
+                                    min: '0',
                                     value: newExpense.ratio_a,
                                     onChange: (ev) => setNewExpense({...newExpense, ratio_a: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                    className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
                                 })
                             ),
                             e('div', null,
-                                e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, `${personB} Ratio`),
+                                e('label', { className: 'block text-sm font-medium text-slate-700 mb-1' }, `${personB} Ratio`),
                                 e('input', {
                                     type: 'number',
                                     step: '0.01',
+                                    min: '0',
                                     value: newExpense.ratio_b,
                                     onChange: (ev) => setNewExpense({...newExpense, ratio_b: ev.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md'
+                                    className: 'w-full px-3 py-2 border border-slate-300 rounded-md bg-white'
                                 })
                             )
                         ),
 
                         e('button', {
                             onClick: addExpense,
-                            className: 'w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700'
+                            className: 'w-full bg-teal-700 text-white py-2 rounded-md hover:bg-teal-800 font-semibold'
                         }, '+ Add Expense')
                     ),
 
-                    // Expenses List
                     e('div', { className: 'mb-6' },
-                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Expenses'),
-                        expenses.length === 0 
-                            ? e('p', { className: 'text-gray-500 text-center py-8' }, 'No expenses yet')
+                        e('h2', { className: 'text-xl font-semibold text-slate-900 mb-4' }, 'Expenses'),
+                        expenses.length === 0
+                            ? e('p', { className: 'text-slate-500 text-center py-8 border border-dashed border-slate-300 rounded-lg' }, 'No expenses yet')
                             : e('div', { className: 'space-y-2' },
                                 expenses.map(expense => {
                                     const ratioA = parseFloat(expense.ratio_a) || 0;
@@ -323,101 +442,112 @@
                                     const total = ratioA + ratioB;
                                     const percentA = total > 0 ? (ratioA / total * 100).toFixed(1) : 50;
                                     const percentB = total > 0 ? (ratioB / total * 100).toFixed(1) : 50;
+                                    const canDelete = !expense.created_by || expense.created_by === currentUser;
+                                    const impact = getExpenseImpact(expense);
 
                                     return e('div', {
                                         key: expense.id,
-                                        className: 'border border-gray-200 rounded-lg p-4 hover:bg-gray-50'
+                                        className: `border rounded-lg p-4 transition-colors ${impact.cardClass}`
                                     },
-                                        e('div', { className: 'flex justify-between items-start' },
-                                            e('div', { className: 'flex-1' },
-                                                e('div', { className: 'flex items-center gap-2 mb-1' },
-                                                    e('span', { className: 'font-semibold text-gray-800' }, expense.description),
-                                                    e('span', { className: 'text-lg font-bold text-green-600' }, `$${parseFloat(expense.amount).toFixed(2)}`)
+                                        e('div', { className: 'flex justify-between items-start gap-4' },
+                                            e('div', { className: 'flex-1 min-w-0' },
+                                                e('div', { className: 'flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2' },
+                                                    e('span', { className: 'font-semibold text-slate-900 break-words' }, expense.description),
+                                                    e('span', { className: `text-lg font-bold ${impact.amountClass}` }, `Total ${formatUsd(expense.amount)}`),
+                                                    shouldShowOriginalCurrency(expense) && e('span', { className: 'text-sm text-slate-500' },
+                                                        `${formatOriginalAmount(expense)} at ${formatUsd(expense.exchange_rate_to_usd || 1)} per ${expense.original_currency || 'USD'}`
+                                                    )
                                                 ),
-                                                e('div', { className: 'text-sm text-gray-600' },
+                                                e('div', { className: 'mb-2 flex flex-wrap gap-2 text-xs font-semibold' },
+                                                    e('span', { className: `rounded-full border px-2.5 py-1 ${impact.badgeClass}` },
+                                                        impact.message
+                                                    )
+                                                ),
+                                                e('div', { className: 'text-sm text-slate-600 flex flex-wrap gap-x-2 gap-y-1' },
                                                     e('span', null, formatDateTime(expense.datetime)),
-                                                    e('span', { className: 'mx-2' }, '•'),
+                                                    e('span', null, '|'),
                                                     e('span', null, `Paid by ${expense.paid_by === 'A' ? personA : personB}`),
-                                                    e('span', { className: 'mx-2' }, '•'),
+                                                    e('span', null, '|'),
                                                     e('span', null,
                                                         expense.split_mode === 'equal'
                                                             ? 'Split equally (50% / 50%)'
                                                             : `Ratio ${ratioA}:${ratioB} (${percentA}% / ${percentB}%)`
-                                                    )
+                                                    ),
+                                                    expense.created_by && e('span', null, `| Added by ${expense.created_by}`)
                                                 )
                                             ),
-                                            e('button', {
+                                            canDelete && e('button', {
                                                 onClick: () => deleteExpense(expense.id),
-                                                className: 'text-red-500 hover:text-red-700 ml-4 no-print'
-                                            }, '🗑️')
+                                                className: 'text-red-600 hover:text-red-800 ml-2 no-print text-sm font-semibold',
+                                                title: 'Delete expense'
+                                            }, 'Delete')
                                         )
                                     );
                                 })
                             )
                     ),
 
-                    // Settlement
-                    expenses.length > 0 && e('div', { className: 'bg-green-50 p-6 rounded-lg' },
-                        e('h2', { className: 'text-xl font-semibold text-gray-800 mb-4' }, 'Settlement Summary'),
-                        
-                        e('div', { className: 'grid grid-cols-2 gap-6 mb-6' },
-                            e('div', { className: 'bg-white p-4 rounded-lg' },
-                                e('h3', { className: 'font-semibold text-gray-700 mb-2' }, personA),
+                    expenses.length > 0 && e('div', { className: 'bg-emerald-50 border border-emerald-100 p-6 rounded-lg' },
+                        e('h2', { className: 'text-xl font-semibold text-slate-900 mb-4' }, 'Settlement Summary'),
+
+                        e('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-6 mb-6' },
+                            e('div', { className: 'bg-white p-4 rounded-lg border border-emerald-100' },
+                                e('h3', { className: 'font-semibold text-slate-700 mb-2' }, personA),
                                 e('div', { className: 'space-y-1 text-sm' },
                                     e('div', { className: 'flex justify-between' },
                                         e('span', null, 'Total Paid:'),
-                                        e('span', { className: 'font-semibold' }, `$${settlement.aPaid.toFixed(2)}`)
+                                        e('span', { className: 'font-semibold' }, formatUsd(settlement.aPaid))
                                     ),
                                     e('div', { className: 'flex justify-between' },
                                         e('span', null, 'Should Pay:'),
-                                        e('span', { className: 'font-semibold' }, `$${settlement.aOwes.toFixed(2)}`)
+                                        e('span', { className: 'font-semibold' }, formatUsd(settlement.aOwes))
                                     ),
                                     e('div', { className: 'flex justify-between border-t pt-1' },
                                         e('span', null, 'Balance:'),
                                         e('span', {
-                                            className: `font-bold ${settlement.aBalance >= 0 ? 'text-green-600' : 'text-red-600'}`
-                                        }, `$${settlement.aBalance.toFixed(2)}`)
+                                            className: `font-bold ${settlement.aBalance >= 0 ? 'text-emerald-700' : 'text-red-600'}`
+                                        }, formatUsd(settlement.aBalance))
                                     )
                                 )
                             ),
-                            e('div', { className: 'bg-white p-4 rounded-lg' },
-                                e('h3', { className: 'font-semibold text-gray-700 mb-2' }, personB),
+                            e('div', { className: 'bg-white p-4 rounded-lg border border-emerald-100' },
+                                e('h3', { className: 'font-semibold text-slate-700 mb-2' }, personB),
                                 e('div', { className: 'space-y-1 text-sm' },
                                     e('div', { className: 'flex justify-between' },
                                         e('span', null, 'Total Paid:'),
-                                        e('span', { className: 'font-semibold' }, `$${settlement.bPaid.toFixed(2)}`)
+                                        e('span', { className: 'font-semibold' }, formatUsd(settlement.bPaid))
                                     ),
                                     e('div', { className: 'flex justify-between' },
                                         e('span', null, 'Should Pay:'),
-                                        e('span', { className: 'font-semibold' }, `$${settlement.bOwes.toFixed(2)}`)
+                                        e('span', { className: 'font-semibold' }, formatUsd(settlement.bOwes))
                                     ),
                                     e('div', { className: 'flex justify-between border-t pt-1' },
                                         e('span', null, 'Balance:'),
                                         e('span', {
-                                            className: `font-bold ${settlement.bBalance >= 0 ? 'text-green-600' : 'text-red-600'}`
-                                        }, `$${settlement.bBalance.toFixed(2)}`)
+                                            className: `font-bold ${settlement.bBalance >= 0 ? 'text-emerald-700' : 'text-red-600'}`
+                                        }, formatUsd(settlement.bBalance))
                                     )
                                 )
                             )
                         ),
 
-                        e('div', { className: 'bg-white p-4 rounded-lg border-2 border-green-600' },
-                            e('h3', { className: 'font-bold text-lg text-gray-800 mb-2' }, 'Final Settlement:'),
+                        e('div', { className: 'bg-white p-4 rounded-lg border-2 border-emerald-600' },
+                            e('h3', { className: 'font-bold text-lg text-slate-900 mb-2' }, 'Final Settlement:'),
                             settlement.aBalance > 0
                                 ? e('p', { className: 'text-lg' },
                                     e('span', { className: 'font-semibold' }, personB),
                                     ' owes ',
                                     e('span', { className: 'font-semibold' }, personA),
-                                    e('span', { className: 'text-2xl font-bold text-green-600 ml-2' }, `$${settlement.aBalance.toFixed(2)}`)
+                                    e('span', { className: 'text-2xl font-bold text-emerald-700 ml-2' }, formatUsd(settlement.aBalance))
                                 )
                                 : settlement.aBalance < 0
                                     ? e('p', { className: 'text-lg' },
                                         e('span', { className: 'font-semibold' }, personA),
                                         ' owes ',
                                         e('span', { className: 'font-semibold' }, personB),
-                                        e('span', { className: 'text-2xl font-bold text-green-600 ml-2' }, `$${Math.abs(settlement.aBalance).toFixed(2)}`)
+                                        e('span', { className: 'text-2xl font-bold text-emerald-700 ml-2' }, formatUsd(Math.abs(settlement.aBalance)))
                                     )
-                                    : e('p', { className: 'text-lg text-gray-600' }, 'All settled! No one owes anyone.')
+                                    : e('p', { className: 'text-lg text-slate-600' }, 'All settled! No one owes anyone.')
                         )
                     )
                 )

@@ -1,14 +1,39 @@
 {
+  "currencies": {
+    "USD": {
+      "name": "US Dollar",
+      "symbol": "$",
+      "rate_to_usd": 1.0
+    },
+    "GBP": {
+      "name": "British Pound",
+      "symbol": "GBP",
+      "rate_to_usd": 1.27
+    },
+    "CNY": {
+      "name": "Chinese Yuan",
+      "symbol": "RMB",
+      "rate_to_usd": 0.14
+    }
+  },
   "sessions": {
     "123456": {
-      "person_a": "Person A Name",
-      "person_b": "Person B Name",
-      "users": ["user1", "user2"]
+      "person_a": "Alice",
+      "person_b": "Bob",
+      "users": [
+        "uAlice",
+        "uBob"
+      ],
+      "description": "Example trip expenses."
     },
     "789012": {
       "person_a": "Another Person",
       "person_b": "Another Friend",
-      "users": ["username1", "username2"]
+      "users": [
+        "username1",
+        "username2"
+      ],
+      "description": "Another shared expense session."
     }
   }
 }

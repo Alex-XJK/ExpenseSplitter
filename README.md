@@ -38,11 +38,12 @@ expense-splitter/
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Container image definition
 ├── docker-compose.yml     # Local container runner
-├── config.json.example    # Example configuration (commit this)
-├── config.json           # Your actual config (DO NOT commit - in .gitignore)
-├── .gitignore            # Git ignore file
-├── database.db           # SQLite database (auto-created, gitignored)
+├── config.json.example    # Example configuration
+├── config.json            # Your actual config (DO NOT commit, gitignored)
+├── .gitignore             # Git ignore file
+├── database.db            # SQLite database (auto-created, gitignored)
 └── templates/
+    ├── home.html               # Homepage template
     └── expense_splitter.html   # Frontend HTML
 ```
 
@@ -67,13 +68,27 @@ Edit `config.json` (NOT the .example file) to add your sessions:
 
 ```json
 {
+  "currencies": {
+    "USD": {
+      "name": "US Dollar",
+      "symbol": "$",
+      "rate_to_usd": 1.0
+    },
+    "GBP": {
+      "name": "British Pound",
+      "symbol": "£",
+      "rate_to_usd": 1.27
+    }
+  },
   "sessions": {
     "your_trip_2026": {
+      "description": "Summer trip shared expenses",
       "person_a": "Your Name",
       "person_b": "Friend Name",
       "users": ["yourname", "friendname"]
     },
-    "another_trip": {
+    "apartment_expense": {
+      "description": "Apartment supplies and shared bills",
       "person_a": "Alice",
       "person_b": "Bob",
       "users": ["alice", "bob"]
@@ -86,6 +101,17 @@ Edit `config.json` (NOT the .example file) to add your sessions:
 - `config.json` contains your private data and is in `.gitignore`
 - `config.json.example` is the template you commit to GitHub
 - Never commit `config.json` to a public repository
+- The homepage only shows session descriptions. Share full `/session/{session_id}/user/{username}` URLs directly with the trusted people who need them.
+
+#### Currency Conversion
+
+All settlement math is still done in USD. The optional `currencies` section lets the local admin define fixed conversion rates without any live exchange-rate lookup:
+
+- `rate_to_usd` is the number of USD for 1 unit of that currency.
+- `USD` is added automatically with a rate of `1.0` if it is missing.
+- Each expense stores both the converted USD value and the original amount/currency so the calculation stays transparent.
+
+If your local `config.json` does not include `currencies`, the app will only show USD.
 
 ### 3. Run the Application
 
