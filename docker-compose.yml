@@ -1,0 +1,11 @@
+services:
+  expense-splitter:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      EXPENSE_SPLITTER_CONFIG: /app/config.json
+      EXPENSE_SPLITTER_DATABASE: /data/database.db
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/data

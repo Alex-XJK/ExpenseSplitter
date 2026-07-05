@@ -36,6 +36,8 @@ This is a convenience tool for friends, not a financial security application.
 expense-splitter/
 ├── server.py              # Flask backend
 ├── requirements.txt       # Python dependencies
+├── Dockerfile             # Container image definition
+├── docker-compose.yml     # Local container runner
 ├── config.json.example    # Example configuration (commit this)
 ├── config.json           # Your actual config (DO NOT commit - in .gitignore)
 ├── .gitignore            # Git ignore file
@@ -94,7 +96,28 @@ python server.py
 
 The server will start on `http://0.0.0.0:5000`
 
-### 4. Access the Application
+### 4. Run with Docker
+
+The container expects your private `config.json` to be mounted at runtime and stores SQLite data in `./data`:
+
+```bash
+mkdir -p data
+docker compose up --build
+```
+
+Then open `http://localhost:5000/`.
+
+Without Compose, you can run the same image manually:
+
+```bash
+docker build -t expense-splitter .
+docker run --rm -p 5000:5000 \
+  -v "$(pwd)/config.json:/app/config.json:ro" \
+  -v "$(pwd)/data:/data" \
+  expense-splitter
+```
+
+### 5. Access the Application
 
 - `http://localhost:5000/`
 
