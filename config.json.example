@@ -7,12 +7,12 @@
     },
     "GBP": {
       "name": "British Pound",
-      "symbol": "GBP",
+      "symbol": "£",
       "rate_to_usd": 1.27
     },
     "CNY": {
       "name": "Chinese Yuan",
-      "symbol": "RMB",
+      "symbol": "¥",
       "rate_to_usd": 0.14
     }
   },

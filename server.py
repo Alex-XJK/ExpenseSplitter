@@ -62,7 +62,11 @@ def normalize_currencies(config):
 
 CONFIG = load_config()
 SESSIONS = CONFIG.get('sessions', {})
-CURRENCIES = normalize_currencies(CONFIG)
+
+
+def get_currencies():
+    """Load the latest configured rates for the current request."""
+    return normalize_currencies(load_config())
 
 
 def get_db():
@@ -93,26 +97,6 @@ def init_db():
             )
         ''')
 
-        columns = {
-            column['name']
-            for column in db.execute('PRAGMA table_info(expenses)').fetchall()
-        }
-        migrations = {
-            'original_amount': "ALTER TABLE expenses ADD COLUMN original_amount REAL",
-            'original_currency': "ALTER TABLE expenses ADD COLUMN original_currency TEXT DEFAULT 'USD'",
-            'exchange_rate_to_usd': "ALTER TABLE expenses ADD COLUMN exchange_rate_to_usd REAL DEFAULT 1",
-            'created_by': "ALTER TABLE expenses ADD COLUMN created_by TEXT"
-        }
-
-        for column, statement in migrations.items():
-            if column not in columns:
-                db.execute(statement)
-
-        db.execute('''
-            UPDATE expenses
-            SET original_amount = amount
-            WHERE original_amount IS NULL
-        ''')
         db.commit()
         db.close()
 
@@ -176,7 +160,7 @@ def get_session_info(session_id):
         'session_id': session_id,
         'person_a': SESSIONS[session_id]['person_a'],
         'person_b': SESSIONS[session_id]['person_b'],
-        'currencies': CURRENCIES
+        'currencies': get_currencies()
     })
 
 
@@ -219,7 +203,7 @@ def add_expense(session_id):
         return jsonify({'error': 'Amount must be non-negative'}), 400
 
     original_currency = str(data.get('original_currency') or 'USD').upper()
-    currency = CURRENCIES.get(original_currency)
+    currency = get_currencies().get(original_currency)
     if not currency:
         return jsonify({'error': f'Unsupported currency: {original_currency}'}), 400
 

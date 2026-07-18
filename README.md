@@ -109,7 +109,8 @@ All settlement math is still done in USD. The optional `currencies` section lets
 
 - `rate_to_usd` is the number of USD for 1 unit of that currency.
 - `USD` is added automatically with a rate of `1.0` if it is missing.
-- Each expense stores both the converted USD value and the original amount/currency so the calculation stays transparent.
+- Each expense stores the original amount/currency, the rate used when it was added, and the converted USD value. This keeps historical balances stable even if rates later change.
+- Currency rates are reloaded from `config.json` for each relevant request. After editing a rate, refresh the page to use it for newly added expenses; existing expenses keep their original conversion.
 
 If your local `config.json` does not include `currencies`, the app will only show USD.
 
